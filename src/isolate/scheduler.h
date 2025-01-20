@@ -151,6 +151,7 @@ class UvScheduler final : public LockedScheduler {
 		UvScheduler(const UvScheduler&) = delete;
 		~UvScheduler();
 		auto operator=(const UvScheduler&) = delete;
+		uv_loop_t *GetLoop() const { return loop; }
 
 	private:
 		void DecrementUvRef() override;

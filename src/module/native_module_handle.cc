@@ -21,7 +21,8 @@ NativeModule::NativeModule(const std::string& filename) : init(nullptr) {
 	if (uv_dlopen(filename.c_str(), &lib) != 0) {
 		throw RuntimeGenericError("Failed to load module");
 	}
-	if (uv_dlsym(&lib, "InitForContext", reinterpret_cast<void**>(&init)) != 0 || init == nullptr) {
+	uv_dlsym(&lib, "InitForContextWithLoop", reinterpret_cast<void**>(&init_loop));
+	if (uv_dlsym(&lib, "InitForContext", reinterpret_cast<void**>(&init)) != 0 || ( init == nullptr && init_loop == nullptr )) {
 		uv_dlclose(&lib);
 		throw RuntimeGenericError("Module is not isolated-vm compatible");
 	}
@@ -31,8 +32,9 @@ NativeModule::~NativeModule() {
 	uv_dlclose(&lib);
 }
 
-void NativeModule::InitForContext(Isolate* isolate, Local<Context> context, Local<Object> target) {
-	init(isolate, context, target);
+void NativeModule::InitForContext(Isolate* isolate, Local<Context> context, Local<Object> target, uv_loop_t* loop ) {
+	if( init_loop ) init_loop( isolate, context, target, loop );
+	else init(isolate, context, target);
 }
 
 /**
@@ -82,10 +84,12 @@ class CreateRunner : public ThreePhaseTask {
 			Local<Context> context_handle = Deref(context);
 			Context::Scope context_scope(context_handle);
 			Local<Object> exports = Object::New(isolate);
-			module->InitForContext(isolate, context_handle, exports);
+			IsolateEnvironment* env = Executor::GetCurrentEnvironment();
+			UvScheduler &scheduler = dynamic_cast<UvScheduler&>( env->GetScheduler() );
+			module->InitForContext(isolate, context_handle, exports, scheduler.GetLoop());
 			// Once a native module is imported into an isolate, that isolate holds a reference to the module forever
 			auto* ptr = module.get();
-			Executor::GetCurrentEnvironment()->native_modules.emplace(ptr, std::move(module));
+			env->native_modules.emplace(ptr, std::move(module));
 			result = std::make_unique<ReferenceHandleTransferable>(exports);
 		}
 

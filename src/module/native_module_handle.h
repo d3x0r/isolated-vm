@@ -13,15 +13,17 @@ namespace ivm {
 class NativeModule {
 	private:
 		using init_t = void(*)(v8::Isolate *, v8::Local<v8::Context>, v8::Local<v8::Object>);
+		using init_loop_t = void(*)(v8::Isolate *, v8::Local<v8::Context>, v8::Local<v8::Object>, uv_loop_t* loop);
 		uv_lib_t lib;
 		init_t init;
+		init_loop_t init_loop;
 
 	public:
 		explicit NativeModule(const std::string& filename);
 		NativeModule(const NativeModule&) = delete;
 		auto operator= (const NativeModule&) -> NativeModule& = delete;
 		~NativeModule();
-		void InitForContext(v8::Isolate* isolate, v8::Local<v8::Context> context, v8::Local<v8::Object> target);
+		void InitForContext(v8::Isolate* isolate, v8::Local<v8::Context> context, v8::Local<v8::Object> target, uv_loop_t* );
 };
 
 class NativeModuleHandle : public TransferableHandle {
