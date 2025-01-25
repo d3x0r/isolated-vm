@@ -4,6 +4,7 @@
 #include <v8.h>
 #include <uv.h>
 
+#include "../isolated_vm_config.h"
 #include "executor.h"
 #include "holder.h"
 #include "remote_handle.h"
@@ -197,7 +198,7 @@ class IsolateEnvironment {
 		/**
 		 * Return pointer the currently running IsolateEnvironment
 		 */
-		static auto GetCurrent() -> IsolateEnvironment& {
+		ISOLATED_VM_EXPORT static auto GetCurrent() -> IsolateEnvironment& {
 			auto* environment = Executor::GetCurrentEnvironment();
 			assert(environment != nullptr);
 			return *environment;
@@ -207,7 +208,7 @@ class IsolateEnvironment {
 		/**
 		 * Return shared_ptr to current IsolateHolder
 		 */
-		static auto GetCurrentHolder() -> std::shared_ptr<IsolateHolder> {
+		ISOLATED_VM_EXPORT static auto GetCurrentHolder() -> std::shared_ptr<IsolateHolder> {
 			return Executor::GetCurrentEnvironment()->holder.lock();
 		}
 

@@ -22,6 +22,7 @@
 					4101, # Unreferenced local (msvc fires these for ignored exception)
 					4068, # Unknown pragma
 				],
+				'defines' : [ 'ISOLATED_VM_INTERNAL' ],
 				'conditions': [
 					[ 'OS == "win"', { 'defines': [ 'NOMSG', 'NOMINMAX', 'WIN32_LEAN_AND_MEAN' ] } ],
 				],

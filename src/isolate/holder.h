@@ -1,4 +1,5 @@
 #pragma once
+#include "../isolated_vm_config.h"
 #include "platform_delegate.h"
 #include "runnable.h"
 #include "v8_version.h"
@@ -36,7 +37,7 @@ class IsolateHolder {
 		auto Dispose() -> bool;
 		void Release();
 		auto GetIsolate() -> std::shared_ptr<IsolateEnvironment>;
-		void ScheduleTask(std::unique_ptr<Runnable> task, bool run_inline, bool wake_isolate, bool handle_task = false);
+		ISOLATED_VM_EXPORT void ScheduleTask(std::unique_ptr<Runnable> task, bool run_inline, bool wake_isolate, bool handle_task = false);
 
 	private:
 		lockable_t<std::shared_ptr<IsolateEnvironment>> isolate;
