@@ -177,7 +177,8 @@ inline auto Executor::GetDefaultEnvironment() -> IsolateEnvironment& {
 }
 
 inline auto Executor::IsDefaultThread() -> bool {
-	return std::this_thread::get_id() == current_executor->default_thread;
+	return current_executor && std::this_thread::get_id()
+	     == current_executor->default_thread;
 };
 
 } // namespace ivm

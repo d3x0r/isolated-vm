@@ -85,4 +85,33 @@ void IsolateTaskRunner::PostDelayedTask(std::unique_ptr<v8::Task> task, double d
 	});
 }
 
+extern "C" 
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+void ScheduleTask( uintptr_t hIsolate, std::unique_ptr<Runnable> task ) {
+	 IsolateHolder *holder = (IsolateHolder*)hIsolate;
+
+	 holder->ScheduleTask( std::move(task), false, true, false );
+}
+
+extern "C"
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+
+uintptr_t GetCurrentIsolate( void ) {
+	return (uintptr_t)IsolateEnvironment::GetCurrentHolder().get();
+}
+
+extern "C"
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+v8::Local<v8::Context> GetDefaultContext( void ) {
+	return IsolateEnvironment::GetCurrent().DefaultContext();
+}
+
+
 } // namespace ivm
+

@@ -3,6 +3,7 @@
   "version": "5.0.3",
   "description": "Access to multiple isolates",
   "main": "isolated-vm.js",
+  "module": "isolated-vm.mjs",
   "types": "isolated-vm.d.ts",
   "engines": {
     "node": ">=18.0.0"

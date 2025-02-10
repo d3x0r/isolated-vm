@@ -195,7 +195,9 @@ class ModuleLinker : public ClassHandle {
 						break;
 					case ModuleInfo::LinkStatus::Linking:
 						if (info->linker != this) {
-							throw RuntimeGenericError("Module is currently being linked by another linker");
+							printf( "ivm:module_handle:linker and this: %p %p\n", info->linker, this );
+							fflush( stdout );
+							//throw RuntimeGenericError("Module is currently being linked by another linker");
 						}
 						return;
 					case ModuleInfo::LinkStatus::Linked:
