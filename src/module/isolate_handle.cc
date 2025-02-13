@@ -57,9 +57,15 @@ auto IsolateHandle::Definition() -> Local<FunctionTemplate> {
 		"isDisposed", MemberAccessor<decltype(&IsolateHandle::IsDisposedGetter), &IsolateHandle::IsDisposedGetter>{},
 		"referenceCount", MemberAccessor<decltype(&IsolateHandle::GetReferenceCount), &IsolateHandle::GetReferenceCount>{},
 		"wallTime", MemberAccessor<decltype(&IsolateHandle::GetWallTime), &IsolateHandle::GetWallTime>{},
+		"setImportModuleDynamicCallback", MemberFunction<decltype(&IsolateHandle::SetImportModuleDynamicCallback ), &IsolateHandle::SetImportModuleDynamicCallback>{},
 		"startCpuProfiler", MemberFunction<decltype(&IsolateHandle::StartCpuProfiler), &IsolateHandle::StartCpuProfiler>{},
 		"stopCpuProfiler", MemberFunction<decltype(&IsolateHandle::StopCpuProfiler<1>), &IsolateHandle::StopCpuProfiler<1>>{}
 	));
+}
+
+auto IsolateHandle::SetImportModuleDynamicCallback(Local<Function> cb)-> Local<Value> {
+	isolate->import_dynamic_callback.Reset( Isolate::GetCurrent(), cb );
+	return Undefined( Isolate::GetCurrent() );
 }
 
 /**
@@ -113,6 +119,7 @@ auto IsolateHandle::New(MaybeLocal<Object> maybe_options) -> unique_ptr<ClassHan
 	auto holder = IsolateEnvironment::New(memory_limit, std::move(snapshot_blob), snapshot_blob_length);
 	auto env = holder->GetIsolate();
 	env->GetIsolate()->SetHostInitializeImportMetaObjectCallback(ModuleHandle::InitializeImportMeta);
+	env->GetIsolate()->SetHostImportModuleDynamicallyCallback(ModuleHandle::ImportModuleDynamically);
 	env->error_handler = error_handler;
 	if (inspector) {
 		env->EnableInspectorAgent();

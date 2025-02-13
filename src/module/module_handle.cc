@@ -102,6 +102,96 @@ auto ModuleHandle::Release() -> Local<Value> {
 	return Undefined(Isolate::GetCurrent());
 }
 
+
+class ImportModuleDynamicallyTask : public Runnable {
+ public:
+	ImportModuleDynamicallyTask( Local<Promise::Resolver> resolver
+	                           , Local<Data> host_defined_options
+	                           , Local<Value> resource_name
+	                           , Local<String> specifier
+	                           , Local<FixedArray> import_attributes )
+	    : resolver{ Isolate::GetCurrent(), resolver }
+	    , host_defined_options{ Isolate::GetCurrent(), host_defined_options }
+	    , resource_name{ Isolate::GetCurrent(), resource_name }
+	    , specifier{ Isolate::GetCurrent(), specifier }
+	    , import_attributes{ Isolate::GetCurrent(), import_attributes } {}
+	void Run() final {
+		Isolate *isolate = Isolate::GetCurrent();
+		printf( "Got callback import?\n" );
+		fflush( stdout );
+		Locker locker( isolate );
+		if( !locker.IsLocked( isolate ) ) {
+			printf( "Have to wait to lock? Can we ever lock?\n" );
+			fflush( stdout );
+		}
+
+		HandleScope handle_scope( isolate );
+		Context::Scope context_scope{
+		     IsolateEnvironment::GetCurrent().DefaultContext() };
+		IsolateEnvironment &env = IsolateEnvironment::GetCurrent();
+		shared_ptr<IsolateHolder> holder   = env.GetCurrentHolder();
+		v8::Local<v8::Object> opts
+		     = host_defined_options.Get( isolate ).As<Object>( );
+		v8::Local<v8::Object> attribs
+		     = import_attributes.Get( isolate ).As<Object>();
+		Local<Value> args[ 5 ]
+		     = { resolver.Get( isolate ), opts
+		       , resource_name.Get( isolate ), specifier.Get( isolate )
+		       , attribs };
+		Local<Function> cb = holder->import_dynamic_callback.Get( isolate );
+		Local<Context> ctx = context.Get( isolate );
+		if( !cb.IsEmpty() )
+			cb->Call( isolate->GetCurrentContext(), Null(isolate), 5, args );
+		// this->Run2( isolate, isolate->GetCurrentContext() );
+
+		isolate->PerformMicrotaskCheckpoint();
+	}
+
+ private:
+	Persistent<Context> context;
+	Persistent<Promise::Resolver> resolver;
+	Persistent<Data> host_defined_options;
+	Persistent<Value> resource_name;
+	Persistent<String> specifier;
+	Persistent<FixedArray> import_attributes;
+};
+
+v8::MaybeLocal<v8::Promise>
+ModuleHandle::ImportModuleDynamically( v8::Local<v8::Context> context
+                                     , v8::Local<v8::Data> host_defined_options
+                                     , v8::Local<v8::Value> resource_name
+                                     , v8::Local<v8::String> specifier
+                                     , v8::Local<v8::FixedArray> import_attributes ) {
+	// this is called from the v8::Module::Instantiate() method
+	// which will be running in the ivm instance; and context
+	// so this has to be uv_scheduled to the main thread
+	Local<Promise::Resolver> resolver
+	     = Unmaybe( Promise::Resolver::New( context ) );
+	Local<Promise> promise = resolver->GetPromise();
+
+	if( !IsolateEnvironment::GetCurrent().GetCurrentHolder()->import_dynamic_callback.IsEmpty() ) {
+		printf( "how to get a proper runner to post my task to UV loop?\n" );
+		Executor::GetCurrentEnvironment()->GetTaskRunner()->PostTask(
+		     std::make_unique<ImportModuleDynamicallyTask>(
+		          resolver, host_defined_options, resource_name, specifier
+		          , import_attributes ) );
+		/*
+		IsolateEnvironment::GetCurrent().GetTaskRunner()->PostTask(
+			 std::make_unique<ImportModuleDynamicallyTask>(
+			 resolver, host_defined_options, resource_name, specifier
+			 , import_attributes ) );
+			 */
+	}else
+		resolver->Reject( context, v8_string( "dynamic import callback not registered" ) );
+	/*
+	IsolateEnvironment::GetCurrentHolder().get()->ScheduleTask(
+	     std::make_unique<ImportModuleDynamicallyTask>(promise, host_defined_options, resource_name, specifier, import_attributes ), false, true, false );
+	*/
+
+	return MaybeLocal<Promise>(promise);
+}
+
+
 void ModuleHandle::InitializeImportMeta(Local<Context> context, Local<Module> module, Local<Object> meta) {
 	ModuleInfo* found = LookupModuleInfo(module);
 	if (found != nullptr) {
