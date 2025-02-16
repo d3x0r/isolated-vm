@@ -42,6 +42,8 @@ class IsolateHandle : public TransferableHandle {
 		auto GetReferenceCount() -> v8::Local<v8::Value>;
 		auto IsDisposedGetter() -> v8::Local<v8::Value>;
 		static auto CreateSnapshot(ArrayRange script_handles, v8::MaybeLocal<v8::String> warmup_handle) -> v8::Local<v8::Value>;
+
+		auto SetImportModuleDynamicCallback( v8::Local<v8::Function> ) -> v8::Local<v8::Value>;
 };
 
 } // namespace ivm

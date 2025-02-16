@@ -102,6 +102,321 @@ auto ModuleHandle::Release() -> Local<Value> {
 	return Undefined(Isolate::GetCurrent());
 }
 
+
+static void ImportResolved( const FunctionCallbackInfo<Value> &info );
+static void ImportRejected( const FunctionCallbackInfo<Value> &info );
+
+
+struct pu8pair {
+	v8::String::Utf8Value *key;
+	v8::String::Utf8Value *value;
+};
+
+struct pendingImport {
+	v8::Persistent<v8::Promise::Resolver> resolver;
+	std::shared_ptr<IsolateHolder> holder;
+	pendingImport(
+	     v8::Isolate *target_isolate
+		, v8::Persistent<v8::Promise::Resolver> &resolver
+	             , std::shared_ptr<IsolateHolder> holder )
+	    : resolver{target_isolate, resolver }
+	    , holder( holder ) {
+//		this->resolver.Reset( Isolate::GetCurrent(), resolver );
+	 }
+};
+
+v8::Local<v8::Object> GetInternalClass( Isolate *isolate ) {
+	// Prepare constructor template
+
+	v8::MaybeLocal<v8::FunctionTemplate> classTemplate
+	     = v8::FunctionTemplate::New( isolate );
+	v8::Local<v8::FunctionTemplate> classTemplate2
+	     = classTemplate.ToLocalChecked();
+	classTemplate2->SetClassName(
+	     String::NewFromUtf8Literal( isolate, "ivm::InternalTransport" ) );
+	classTemplate2->InstanceTemplate()->SetInternalFieldCount(
+	     1 ); // 1 required for arbitrary C++ pointer
+
+	Local<Function> fn
+	     = classTemplate2->GetFunction( isolate->GetCurrentContext() )
+	          .ToLocalChecked();
+	return fn->NewInstance( isolate->GetCurrentContext(), 0, nullptr ).ToLocalChecked();
+}
+
+class ImportModuleDynamicallyTask : public Runnable {
+
+ public:
+	ImportModuleDynamicallyTask( std::shared_ptr<IsolateHolder> holder
+	                           , std::shared_ptr<IsolateHolder> importing_holder
+	                           , Local<Promise::Resolver> resolver
+	                           , Local<Data> host_defined_options
+	                           , String::Utf8Value* resource_name
+	                           , String::Utf8Value * specifier
+	                           , int pairs
+	                           , pu8pair * import_attributes )
+	    : holder( holder )
+	    , importing_holder( importing_holder )
+	    , resolver{ resolver->GetIsolate(), resolver }
+	    , host_defined_options{ Isolate::GetCurrent(), host_defined_options }
+	    , resource_name( resource_name )
+	    , specifier(specifier )
+	    , pairs( pairs )
+	    , import_attributes(  import_attributes ) {}
+	void Run() final {
+		Isolate *isolate = Isolate::GetCurrent();
+		printf( "Got callback import?\n" );
+		fflush( stdout );
+		/*
+		Locker locker( isolate );
+		if( !locker.IsLocked( isolate ) ) {
+		   printf( "Have to wait to lock? Can we ever lock?\n" );
+		   fflush( stdout );
+		}
+		*/
+
+		HandleScope handle_scope( isolate );
+		Local<Context> context  = isolate->GetCurrentContext();
+		// Context::Scope context_scope{
+		//		     IsolateEnvironment::GetCurrent().DefaultContext() };
+		IsolateEnvironment &env = IsolateEnvironment::GetCurrent();
+		// shared_ptr<IsolateHolder> holder   = env.GetCurrentHolder();
+		v8::Local<v8::Object> opts
+		     = host_defined_options.Get( isolate ).As<Object>();
+
+		v8::Local<v8::Object> attribs = Object::New( isolate );
+		for( int i = 0; i < pairs; i++ ) {
+			attribs->Set( context, v8_string( ( **import_attributes[ i ].key ) )
+			            , v8_string( ( **import_attributes[ i ].value ) ) );
+		}
+		Local<Value> args[ 3 ]
+		     = { v8_string( **specifier ), v8_string( **resource_name ), attribs };
+
+		Local<Function> cb = holder->import_dynamic_callback.Get( isolate );
+		Local<Context> ctx = this->context.Get( isolate );
+		if( !cb.IsEmpty() ) {
+			Local<Value> promise_result = cb
+			     ->Call( isolate->GetCurrentContext(), Null( isolate ), 3, args )
+			     .ToLocalChecked();
+			Local<Promise> pr         = promise_result.As<Promise>();
+			if( !pr.IsEmpty() ) {
+				Local<Object> importExtra = GetInternalClass( isolate );
+				pendingImport *pending_import
+				     = new pendingImport( *holder->GetIsolate(), resolver, holder );
+				// printf( "Resolver isolate still? %p\n", resolverGetIsolate() );
+				importExtra->SetAlignedPointerInInternalField( 0, pending_import );
+
+				Local<Function> ft
+				     = Function::New( context, ImportResolved, importExtra )
+				          .ToLocalChecked();
+				Local<Function> fc
+				     = Function::New( context, ImportRejected, importExtra )
+				          .ToLocalChecked();
+				MaybeLocal<Promise> result = pr->Then( context, ft, fc );
+			}
+		}
+		// this->Run2( isolate, isolate->GetCurrentContext() );
+
+		isolate->PerformMicrotaskCheckpoint();
+	}
+
+ public:
+	Persistent<Context> context;
+	v8::Persistent<v8::Promise::Resolver> resolver;
+	Persistent<Data> host_defined_options;
+	String::Utf8Value *resource_name;
+	String::Utf8Value* specifier;
+	int pairs;
+	pu8pair *import_attributes;
+	shared_ptr<IsolateHolder> holder;
+	shared_ptr<IsolateHolder> importing_holder;
+};
+
+
+
+struct ImportModuleDynamicallyResolveTask : public Runnable {
+	Persistent<Value> module;
+	Isolate *module_isolate;
+	//class ImportModuleDynamicallyTask *from; 
+	Persistent<Promise::Resolver> promise;
+	bool success;
+	ImportModuleDynamicallyResolveTask( Isolate *module_isolate
+	                                  , Persistent<Promise::Resolver> & promise
+	                                  , Local<Value> module )
+	    : module_isolate( module_isolate )
+	    , promise{ Isolate::GetCurrent(), promise }
+	    , module{ Isolate::GetCurrent() , module } {}
+	void Run() final {
+		// this is running in the VM isolate thread.
+		// and the module we know is in the host isolate?
+		Isolate *ivm_isolate = *Executor::GetCurrentEnvironment();
+		Isolate *isolate = Isolate::GetCurrent();
+		HandleScope handle_scope( isolate );
+		Local<Context> context = Executor::GetCurrentEnvironment()->DefaultContext();
+		Context::Scope ct( context );
+		printf( "Module isn't in this isolate... %p %p", module_isolate
+		      , isolate );
+
+		Local<Object> module = this->module.Get( module_isolate ).As<Object>();
+		Local<Context> ct2 = module->GetCreationContext().ToLocalChecked();
+		Local<Value> name           = module->GetConstructorName();
+		// printf( "Resolving Final Promise here----------------- %s\n", *String::Utf8Value( module_isolate, name ) );
+		 Local<TransferableHandle> dr = module.As<TransferableHandle>();
+		 std::unique_ptr<Transferable> drval = dr->TransferOut();
+
+		Local<Promise::Resolver> pr = promise.Get( isolate );
+
+		pr->Resolve( isolate->GetCurrentContext(), drval->TransferIn() );
+
+		printf( "dispatch resolved promises??\n" );
+		isolate->PerformMicrotaskCheckpoint();
+		printf( "Finish run...\n" );
+	}
+};
+
+struct ImportModuleDynamicallyRejectTask : public Runnable {
+	class ImportModuleDynamicallyTask *from;
+	bool success;
+	ImportModuleDynamicallyRejectTask(
+	     class ImportModuleDynamicallyTask *from ): from(from) {}
+	void Run() final {
+		
+		Isolate *isolate = Isolate::GetCurrent();
+		HandleScope handle_scope( isolate );
+		from->resolver.Get( isolate )->Reject(
+		     from->context.Get( isolate ), Undefined( Isolate::GetCurrent() ) );
+	}
+};
+
+static void ImportResolved( const
+                               FunctionCallbackInfo<Value> &info ) {
+	// this is a callback triggered in the host isolate.
+	// it comes from the Host code linker resolution.
+	// info should be an ivm module... which is portable?
+	Isolate *isolate                  = Isolate::GetCurrent();
+	// this needs to be posted to the VM to resolve the import()
+	// in the vm isolate.
+	Local<Object> importExtra = info.Data().As<Object>();
+	Local<Promise::Resolver> resolver = importExtra
+	     ->Get( info.GetIsolate()->GetCurrentContext(), v8_string( "resolver" ) )
+	     .ToLocalChecked()
+	     .As<Promise::Resolver>();
+	//Local<Object>  = info[0].As<Object>();
+
+	// this is back in the UV context/thread
+	pendingImport *pending_import
+	     = (pendingImport *)importExtra->GetAlignedPointerFromInternalField( 0 );
+	shared_ptr<IsolateHolder> importing_holder = pending_import->holder;
+
+	     //= (IsolateHolder *)importExtra->GetAlignedPointerFromInternalField( 0 );
+
+	//importing_holder = o.Get( info.GetIsolate() );
+	Local<Object> module = info[ 0 ].As<Object>();
+	Local<Module> m2                           = Local<Module>::Cast( module );
+	//m2->
+	String::Utf8Value name( info.GetIsolate(), module->GetConstructorName() );
+
+	Local<ReferenceHandle> ns = module
+	     ->Get( info.GetIsolate()->GetCurrentContext()
+	          , v8_string( "namespace" ) )
+	     .ToLocalChecked()
+	     .As<ReferenceHandle>();
+	String::Utf8Value nsName( ns.As<Object>()->GetIsolate()
+	                        , ns.As<Object>()->GetConstructorName() );
+	Local<Value> dri = ns->DerefInto( MaybeLocal<Object>() );
+	//Isolate *chk = ns->GetIsolate();
+	//Local<Context> chkctx = ns->GetCreationContext().ToLocalChecked();
+	//Local<Array> names = module->GetPropertyNames( info.GetIsolate()->GetCurrentContext() ).ToLocalChecked();
+
+
+
+	importing_holder->ScheduleTask(
+	     std::make_unique<struct ImportModuleDynamicallyResolveTask>(
+	          info.GetIsolate(), pending_import->resolver, dri )
+			     , false, true, false );
+	
+}
+
+void ImportRejected( const FunctionCallbackInfo<Value> &info ) {
+	// this is a callback triggered in the host isolate.
+
+	/*
+			importing_holder->ScheduleTask(
+			     std::make_unique<ImportModuleDynamicallyRejectTask>(this)
+			     , false, true, false );
+	*/
+}
+
+
+v8::MaybeLocal<v8::Promise>
+ModuleHandle::ImportModuleDynamically( v8::Local<v8::Context> context
+                                     , v8::Local<v8::Data> host_defined_options
+                                     , v8::Local<v8::Value> resource_name
+                                     , v8::Local<v8::String> specifier
+                                     , v8::Local<v8::FixedArray> import_attributes ) {
+	Isolate* isolate = Isolate::GetCurrent();
+	String::Utf8Value *r_name = new String::Utf8Value ( isolate, resource_name );
+	String::Utf8Value *spec   = new String::Utf8Value( isolate, specifier );
+
+#if 0
+	// never had host_defined_options with content; but the one I did get
+	// was a FixedArray with 0 length.
+	// v8::Local<v8::Value> hdo   = Local<Value>::Cast( host_defined_options );
+	if( host_defined_options->IsValue() ) {
+		//printf( "Host Defined Options is an Value\n" );
+	} else if( host_defined_options->IsModule() ) {
+		//printf( "Host Defined Options is a IsModule\n" );
+	} else if( host_defined_options->IsContext() ) {
+		//printf( "Host Defined Options is a IsContext\n" );
+	} else if( host_defined_options->IsPrivate() ) {
+		//printf( "Host Defined Options is a IsPrivate\n" );
+	} else if( host_defined_options->IsFixedArray() ) {
+		/*
+		Local<FixedArray> fa = Local<FixedArray>::Cast( host_defined_options );
+		for( int i = 0; i < fa->Length(); i++ ) {
+			v8::Local<v8::Data> v   = fa->Get( context, i );
+			v8::Local<v8::Value> v2 = Local<Value>::Cast( v );
+			// printf( "host_defined_options[%d]: %s\n", i
+			//			      , *String::Utf8Value( isolate, v2 ) );
+		}
+		*/
+		// printf( "Host Defined Options is a IsFixedArray\n" );
+	} else if( host_defined_options->IsFunctionTemplate() ) {
+		// printf( "Host Defined Options is a IsFunctionTemplate\n" );
+	} else {
+		//printf( "Host Defined Options is a ???\n"  );
+	}
+#endif
+
+	pu8pair *attribs = new pu8pair[ import_attributes->Length() ];
+	for( int i = 0; i < import_attributes->Length(); i++ ) {
+		v8::Local<v8::Data> v = import_attributes->Get( context, i );
+		v8::Local<v8::Value> v2 = Local<Value>::Cast( v );
+		if( i & 1 )
+			attribs[ i/2 ].value = new String::Utf8Value( isolate, v2 );
+		else
+			attribs[ i/2 ].key   = new String::Utf8Value( isolate, v2 );
+	}
+	
+	// this is called from the import() method
+	// which will be running in the ivm instance; and context
+	// so this has to be uv_scheduled to the main thread
+	Local<Promise::Resolver> resolver = Unmaybe( Promise::Resolver::New( context ) );
+	//IsolateEnvironment& defenv = Executor::GetDefaultEnvironment();
+	printf( "Resolver isolate %p %p\n", isolate, resolver->GetIsolate() );
+	shared_ptr<IsolateHolder> holder = IsolateEnvironment::GetCurrent().GetCurrentHolder();
+	if( !holder->import_dynamic_callback.IsEmpty() ) {
+		holder->import_dynamic_callback_host_isolate->ScheduleTask(
+		     std::make_unique<ImportModuleDynamicallyTask>(
+		          holder, holder->import_dynamic_callback_host_isolate, resolver
+		          , host_defined_options, r_name, spec, import_attributes->Length()/2, attribs )
+		     , false, true, false );
+	}else
+		resolver->Reject( context, v8_string( "dynamic import callback not registered" ) );
+
+	return MaybeLocal<Promise>( resolver->GetPromise() );
+}
+
+
 void ModuleHandle::InitializeImportMeta(Local<Context> context, Local<Module> module, Local<Object> meta) {
 	ModuleInfo* found = LookupModuleInfo(module);
 	if (found != nullptr) {
