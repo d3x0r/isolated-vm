@@ -64,7 +64,9 @@ auto IsolateHandle::Definition() -> Local<FunctionTemplate> {
 }
 
 auto IsolateHandle::SetImportModuleDynamicCallback(Local<Function> cb)-> Local<Value> {
+	isolate->import_dynamic_callback_host_isolate = IsolateEnvironment::GetCurrentHolder();
 	isolate->import_dynamic_callback.Reset( Isolate::GetCurrent(), cb );
+
 	return Undefined( Isolate::GetCurrent() );
 }
 

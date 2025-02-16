@@ -37,7 +37,7 @@ class IsolateHolder {
 		void Release();
 		auto GetIsolate() -> std::shared_ptr<IsolateEnvironment>;
 		void ScheduleTask(std::unique_ptr<Runnable> task, bool run_inline, bool wake_isolate, bool handle_task = false);
-
+		std::shared_ptr<IsolateHolder> import_dynamic_callback_host_isolate;
 		v8::Persistent<v8::Function> import_dynamic_callback;
 
 	 private:
